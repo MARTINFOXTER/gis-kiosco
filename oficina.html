@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GIS — Oficina / QR</title>
+  <style>
+    body { font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; margin:0; background:#f1f5f9; color:#0f172a; }
+    header { background:#0f172a; color:#fff; padding:16px 24px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+    header a { color:#d4af37; }
+    main { max-width:900px; margin:24px auto; padding:0 16px 40px; }
+    .card { background:#fff; border-radius:12px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th, td { text-align:left; padding:8px; border-bottom:1px solid #e2e8f0; vertical-align:middle; }
+    img.qr { width:72px; height:72px; }
+    .muted { color:#64748b; font-size:13px; }
+    .err { background:#fee2e2; padding:10px; border-radius:8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>GIS — plantilla y QR (Google Sheets)</strong>
+    <span>
+      <a href="index.html">Kiosco</a> ·
+      <a href="mapa.html">Mapa</a> ·
+      <a id="linkHoja" href="#" target="_blank">Abrir hoja</a>
+    </span>
+  </header>
+  <main>
+    <p class="muted">Alta de empleados: abre la hoja → pestaña Empleados → nueva fila (nº, nombre, servicio S1, TRUE, PIN de 4 dígitos). El QR se genera solo al poner el nombre. Luego menú <strong>GIS Seguridad → Generar QRs imprimibles</strong>.</p>
+    <div class="card">
+      <h2>Empleados</h2>
+      <p id="estado" class="muted">Cargando desde Apps Script…</p>
+      <table>
+        <thead><tr><th>Nº</th><th>Nombre</th><th>Servicio</th><th>QR</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </main>
+  <script src="config.js"></script>
+  <script src="api.js"></script>
+  <script>
+    document.getElementById("linkHoja").href = GIS_SHEET_URL;
+    gisApi({ action: "plantilla" }).then(function (r) {
+      if (!r.ok) { document.getElementById("estado").innerHTML = '<span class="err">' + r.error + "</span>"; return; }
+      document.getElementById("estado").textContent = r.empleados.length + " empleados (PIN no se muestra).";
+      document.getElementById("tbody").innerHTML = r.empleados.map(function (e) {
+        const src = "https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=" + encodeURIComponent(e.codigo_qr || "");
+        return "<tr><td>" + e.numero + "</td><td>" + e.nombre + "</td><td>" + e.servicio + "</td><td>" +
+          (e.codigo_qr ? '<img class="qr" src="' + src + '" alt="QR"><div class="muted">' + e.codigo_qr + "</div>" : "—") +
+          "</td></tr>";
+      }).join("");
+    }).catch(function (e) {
+      document.getElementById("estado").innerHTML = '<span class="err">' + e.message + " Pega Codigo.gs en la hoja y vuelve a implementar la Web App con acceso Cualquiera.</span>";
+    });
+  </script>
+</body>
+</html>

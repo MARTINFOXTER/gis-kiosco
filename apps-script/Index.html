@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GIS — Móvil de servicio</title>
+  <style>
+    body { margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:#0f172a; color:#fff; padding:12px; }
+    .card { background:#16213e; border-radius:16px; padding:16px; max-width:460px; margin:0 auto; }
+    .tabs { display:flex; gap:8px; margin-bottom:12px; }
+    .tab { flex:1; padding:12px; border:0; border-radius:10px; background:#1e293b; color:#cbd5e1; font-weight:700; }
+    .tab.on { background:#d4af37; color:#111; }
+    input, textarea, select { width:100%; padding:12px; border-radius:8px; border:none; font-size:16px; margin-top:8px; box-sizing:border-box; }
+    .btn { display:block; width:100%; padding:14px; margin-top:10px; border:none; border-radius:12px; font-weight:700; color:#fff; }
+    .btn-verde { background:#2e7d32; } .btn-naranja { background:#b26a00; }
+    .btn-dorado { background:#d4af37; color:#111; } .btn-rojo { background:#c62828; }
+    .hint { color:#94a3b8; font-size:13px; text-align:center; }
+    .msg { padding:10px; border-radius:10px; margin-top:10px; text-align:center; }
+    .ok { background:#14532d; } .err { background:#7f1d1d; }
+    .hidden { display:none !important; }
+    .chip { display:inline-block; background:#1e293b; padding:4px 8px; border-radius:8px; margin:2px; }
+  </style>
+</head>
+<body>
+  <div class="card" id="pantallaLogin">
+    <h1 style="text-align:center;font-size:18px;">🛡️ GIS — móvil de trabajo</h1>
+    <div class="tabs">
+      <button class="tab on" id="tabInicio" type="button">Inicio</button>
+      <button class="tab" id="tabFin" type="button">Finalización</button>
+    </div>
+    <p class="hint" id="hint">Nº de empleado + contraseña de 4 dígitos, o QR físico.</p>
+    <div id="reader"></div>
+    <input id="numero" inputmode="numeric" placeholder="Nº de empleado" autocomplete="off">
+    <input id="pin" type="password" maxlength="4" placeholder="Contraseña (4 dígitos)" autocomplete="off">
+    <button class="btn btn-verde" id="btnGo" type="button">Continuar</button>
+    <div id="msgLogin" class="msg hidden"></div>
+  </div>
+  <div class="card hidden" id="pantallaServicio">
+    <div id="equipo" class="hint"></div>
+    <button class="btn btn-verde" id="btnAdd" type="button">＋ Añadir otro trabajador</button>
+    <button class="btn btn-dorado" id="btnNota" type="button">📝 Parte / notas</button>
+    <div id="formNota" class="hidden">
+      <select id="categoria">
+        <option>General</option><option>Persona / conflicto</option>
+        <option>Establecimiento</option><option>Vehículo</option><option>Ronda / PDA</option>
+      </select>
+      <textarea id="descripcion" rows="3" placeholder="Novedades, incidencias..."></textarea>
+      <button class="btn btn-dorado" id="btnEnviarNota" type="button">Guardar nota</button>
+    </div>
+    <button class="btn btn-rojo" id="btnSOS" type="button">🚨 SOS</button>
+    <button class="btn btn-naranja" id="btnIrFin" type="button">🏁 Ir a finalización</button>
+    <p class="hint">GPS cada 2–3 s a Google Sheets. Acepta ubicación.</p>
+    <div id="msgServicio" class="msg hidden"></div>
+  </div>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script>
+    let modo = 'Entrada';
+    let equipo = [];
+    let coords = {};
+    let gpsTimer = null;
+    let lastQr = '';
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(function (p) {
+        coords = { lat: p.coords.latitude, lng: p.coords.longitude, precision: p.coords.accuracy };
+      }, function () {}, { enableHighAccuracy: true });
+    }
+    function run(fn, args, ok, fail) {
+      google.script.run.withSuccessHandler(ok).withFailureHandler(fail || function (e) { show('msgLogin', e.message, false); }).apiGis.apply(null, args);
+    }
+    function show(id, t, ok) {
+      const n = document.getElementById(id);
+      n.textContent = t; n.className = 'msg ' + (ok ? 'ok' : 'err');
+      n.classList.remove('hidden');
+    }
+    function cred() {
+      return { numero: document.getElementById('numero').value.trim(), pin: document.getElementById('pin').value.trim() };
+    }
+    document.getElementById('tabInicio').onclick = function () {
+      modo = 'Entrada'; this.classList.add('on'); document.getElementById('tabFin').classList.remove('on');
+    };
+    document.getElementById('tabFin').onclick = function () {
+      modo = 'Salida'; this.classList.add('on'); document.getElementById('tabInicio').classList.remove('on');
+    };
+    function aplicar(res, extra) {
+      if (!res.ok) { show('msgLogin', res.error, false); return; }
+      const body = Object.assign({ tipo: modo, metodo: extra.qr ? 'QR' : 'PIN' }, cred(), extra);
+      run('ejecutarAccion_', [{ action: 'fichar', qr: extra.qr, tipo: modo, metodo: body.metodo, numero: body.numero, pin: body.pin }], function (r) {
+        if (!r.ok) { show('msgLogin', r.error, false); return; }
+        if (modo === 'Entrada') {
+          const emp = r.empleado;
+          if (!equipo.find(function (x) { return String(x.id) === String(emp.id); })) equipo.push(Object.assign({}, emp, extra));
+          document.getElementById('pantallaLogin').classList.add('hidden');
+          document.getElementById('pantallaServicio').classList.remove('hidden');
+          document.getElementById('equipo').innerHTML = equipo.map(function (e) {
+            return '<span class="chip">' + e.nombre + '</span>';
+          }).join(' ');
+          show('msgServicio', r.mensaje, true);
+          if (!gpsTimer) gpsTimer = setInterval(enviarGps, 2500);
+        } else {
+          equipo = equipo.filter(function (x) { return String(x.id) !== String(r.empleado.id); });
+          show('msgLogin', r.mensaje, true);
+          if (!equipo.length) {
+            document.getElementById('pantallaServicio').classList.add('hidden');
+            document.getElementById('pantallaLogin').classList.remove('hidden');
+            if (gpsTimer) { clearInterval(gpsTimer); gpsTimer = null; }
+          }
+        }
+      });
+    }
+    document.getElementById('btnGo').onclick = function () { aplicar({ ok: true }, {}); };
+    document.getElementById('btnAdd').onclick = function () {
+      document.getElementById('pantallaServicio').classList.add('hidden');
+      document.getElementById('pantallaLogin').classList.remove('hidden');
+      document.getElementById('numero').value = ''; document.getElementById('pin').value = '';
+    };
+    document.getElementById('btnIrFin').onclick = function () {
+      document.getElementById('tabFin').click();
+      document.getElementById('btnAdd').click();
+    };
+    document.getElementById('btnNota').onclick = function () {
+      document.getElementById('formNota').classList.toggle('hidden');
+    };
+    document.getElementById('btnEnviarNota').onclick = function () {
+      if (!equipo.length) return;
+      const emp = equipo[equipo.length - 1];
+      run('ejecutarAccion_', [Object.assign({ action: 'incidencia', categoria: document.getElementById('categoria').value, descripcion: document.getElementById('descripcion').value }, cred(), emp, coords)], function (r) {
+        show('msgServicio', r.ok ? r.mensaje : r.error, r.ok);
+      });
+    };
+    document.getElementById('btnSOS').onclick = function () {
+      if (!confirm('¿Confirmas SOS?')) return;
+      const emp = equipo[equipo.length - 1];
+      run('ejecutarAccion_', [Object.assign({ action: 'sos' }, cred(), emp, coords)], function (r) {
+        show('msgServicio', r.ok ? r.mensaje : r.error, r.ok);
+      });
+    };
+    function enviarGps() {
+      if (!equipo.length || coords.lat == null) return;
+      equipo.forEach(function (emp) {
+        run('ejecutarAccion_', [Object.assign({ action: 'gps' }, cred(), emp, coords)], function () {});
+      });
+    }
+    try {
+      const q = new Html5Qrcode('reader');
+      Html5Qrcode.getCameras().then(function (cams) {
+        if (!cams.length) return;
+        q.start(cams[cams.length - 1].id, { fps: 8, qrbox: 220 }, function (code) {
+          if (code === lastQr) return;
+          lastQr = code;
+          setTimeout(function () { lastQr = ''; }, 2500);
+          aplicar({ ok: true }, { qr: code });
+        });
+      });
+    } catch (e) {}
+  </script>
+</body>
+</html>
