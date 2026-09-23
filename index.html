@@ -1,0 +1,282 @@
+<!-- Página estática para GitHub Pages. Pega tu URL de Apps Script en SCRIPT_URL más abajo. -->
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --azul: #16213e;
+      --azul-osc: #0f172a;
+      --dorado: #d4af37;
+      --verde: #2e7d32;
+      --rojo: #c62828;
+      --gris: #6b7280;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: var(--azul-osc);
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+    }
+    h1 { font-size: 20px; margin: 8px 0 16px; text-align: center; }
+    .card {
+      background: var(--azul);
+      border-radius: 16px;
+      padding: 20px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 4px 20px rgba(0,0,0,.4);
+    }
+    #reader { width: 100%; border-radius: 12px; overflow: hidden; }
+    .btn {
+      display: block; width: 100%; padding: 16px; margin-top: 12px;
+      border: none; border-radius: 12px; font-size: 17px; font-weight: 600;
+      cursor: pointer; color: #fff;
+    }
+    .btn-entrada { background: var(--verde); }
+    .btn-salida { background: #b26a00; }
+    .btn-incidencia { background: var(--dorado); color: #1a1a1a; }
+    .btn-sos { background: var(--rojo); }
+    .btn-volver { background: transparent; border: 1px solid var(--gris); color: #ccc; }
+    .empleado { text-align: center; margin-bottom: 12px; }
+    .empleado .nombre { font-size: 22px; font-weight: 700; }
+    .empleado .servicio { color: #cbd5e1; font-size: 14px; }
+    .msg { text-align: center; padding: 10px; border-radius: 10px; margin-top: 10px; font-size: 14px; }
+    .msg-ok { background: #14532d; }
+    .msg-err { background: #7f1d1d; }
+    textarea, select {
+      width: 100%; padding: 10px; border-radius: 8px; border: none; margin-top: 8px; font-size: 15px;
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <h1>🛡️ GIS Seguridad — Fichaje</h1>
+
+  <div class="card" id="pantallaEscaner">
+    <div id="reader"></div>
+    <div id="msgEscaner" class="msg hidden"></div>
+
+    <div id="entradaManual" style="margin-top:14px;">
+      <div style="text-align:center; color:#94a3b8; font-size:13px; margin-bottom:6px;">
+        Si la cámara no funciona, introduce el código manualmente:
+      </div>
+      <input id="inputCodigoManual" type="text" placeholder="Código de empleado"
+             style="width:100%; padding:12px; border-radius:8px; border:none; font-size:16px; text-align:center; text-transform:uppercase;">
+      <button class="btn btn-entrada" id="btnBuscarManual" style="margin-top:8px;">Buscar</button>
+    </div>
+  </div>
+
+  <div class="card hidden" id="pantallaMenu">
+    <div class="empleado">
+      <div class="nombre" id="nombreEmpleado"></div>
+      <div class="servicio" id="nombreServicio"></div>
+    </div>
+
+    <button class="btn btn-entrada hidden" id="btnEntrada">✅ Iniciar servicio (Entrada)</button>
+    <button class="btn btn-salida hidden" id="btnSalida">🏁 Finalizar servicio (Salida)</button>
+    <button class="btn btn-incidencia" id="btnIncidencia">📝 Registrar incidencia</button>
+    <button class="btn btn-sos" id="btnSOS">🚨 SOS</button>
+    <button class="btn btn-volver" id="btnVolver">← Volver a escanear</button>
+
+    <div id="formIncidencia" class="hidden">
+      <select id="categoriaIncidencia">
+        <option value="General">General</option>
+        <option value="Persona">Persona / conflicto</option>
+        <option value="Establecimiento">Establecimiento</option>
+        <option value="Vehiculo">Vehículo</option>
+        <option value="Otro">Otro</option>
+      </select>
+      <textarea id="descripcionIncidencia" rows="3" placeholder="Descripción del parte / novedad..."></textarea>
+      <button class="btn btn-incidencia" id="btnEnviarIncidencia">Enviar parte</button>
+    </div>
+
+    <div id="msgMenu" class="msg hidden"></div>
+  </div>
+
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script>
+    // ⚠️ Pega aquí la URL de tu Web App de Apps Script (Implementar > Nueva implementación > Aplicación web)
+    const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyUCkx6j-iuFFctzVJhu6VELRr-IB6KrKeKeTa1mNA_qqSZu4TEDv0QdAXv7lutHJ6Qog/exec';
+
+    function llamarAPI(action, params) {
+      return fetch(SCRIPT_URL, {
+        method: 'POST',
+        // text/plain evita el preflight CORS; Apps Script igual lo parsea como JSON
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(Object.assign({ action: action }, params))
+      }).then(function (r) { return r.json(); });
+    }
+
+    let empleadoActual = null;
+    let servicioActual = null;
+    let estadoActual = null;
+    let qrActual = null;
+    let html5QrCode = null;
+    let coords = { lat: null, lng: null };
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(function (pos) {
+        coords.lat = pos.coords.latitude;
+        coords.lng = pos.coords.longitude;
+      }, function () {}, { enableHighAccuracy: true });
+    }
+
+    function mostrar(id) {
+      document.getElementById(id).classList.remove('hidden');
+    }
+    function ocultar(id) {
+      document.getElementById(id).classList.add('hidden');
+    }
+    function mensaje(elId, texto, ok) {
+      const el = document.getElementById(elId);
+      el.textContent = texto;
+      el.className = 'msg ' + (ok ? 'msg-ok' : 'msg-err');
+      mostrar(elId);
+      setTimeout(function () { ocultar(elId); }, 3500);
+    }
+
+    function iniciarEscaner() {
+      // La cámara puede no funcionar en algunos contextos (p.ej. el iframe
+      // interno de Apps Script bloquea getUserMedia). Si falla, no es un
+      // error bloqueante: abajo siempre queda el campo de código manual.
+      try {
+        html5QrCode = new Html5Qrcode('reader');
+        Html5Qrcode.getCameras().then(function (cams) {
+          if (!cams || !cams.length) {
+            mensaje('msgEscaner', 'No se encontró cámara. Usa el código manual de abajo.', false);
+            return;
+          }
+          const camId = cams[cams.length - 1].id; // suele ser la trasera
+          html5QrCode.start(
+            camId,
+            { fps: 10, qrbox: 240 },
+            onEscaneoOk,
+            function () {}
+          ).catch(function (err) {
+            mensaje('msgEscaner', 'Cámara bloqueada por el navegador. Usa el código manual de abajo.', false);
+          });
+        }).catch(function (err) {
+          mensaje('msgEscaner', 'No se pudo acceder a la cámara. Usa el código manual de abajo.', false);
+        });
+      } catch (e) {
+        mensaje('msgEscaner', 'Escáner no disponible. Usa el código manual de abajo.', false);
+      }
+    }
+
+    document.getElementById('btnBuscarManual').onclick = function () {
+      const codigo = document.getElementById('inputCodigoManual').value.trim();
+      if (!codigo) return;
+      document.getElementById('inputCodigoManual').value = '';
+      onEscaneoOk(codigo);
+    };
+    document.getElementById('inputCodigoManual').addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') document.getElementById('btnBuscarManual').click();
+    });
+
+    function pausarEscaner() {
+      if (html5QrCode) { html5QrCode.pause(true); }
+    }
+    function reanudarEscaner() {
+      if (html5QrCode) { html5QrCode.resume(); }
+      else { iniciarEscaner(); }
+    }
+
+    function onEscaneoOk(codigoQR) {
+      pausarEscaner();
+      qrActual = codigoQR;
+      llamarAPI('buscarEmpleado', { qr: codigoQR }).then(function (res) {
+        if (!res.ok) {
+          mensaje('msgEscaner', res.error, false);
+          setTimeout(reanudarEscaner, 1500);
+          return;
+        }
+        empleadoActual = res.empleado;
+        servicioActual = res.servicio;
+        estadoActual = res.estadoActual;
+        mostrarMenu();
+      }).catch(function (err) {
+        mensaje('msgEscaner', 'Error: ' + err.message, false);
+        setTimeout(reanudarEscaner, 1500);
+      });
+    }
+
+    function mostrarMenu() {
+      ocultar('pantallaEscaner');
+      mostrar('pantallaMenu');
+      document.getElementById('nombreEmpleado').textContent = empleadoActual.nombre;
+      document.getElementById('nombreServicio').textContent = servicioActual.nombre;
+      ocultar('formIncidencia');
+
+      if (estadoActual === 'Entrada') {
+        ocultar('btnEntrada');
+        mostrar('btnSalida');
+      } else {
+        mostrar('btnEntrada');
+        ocultar('btnSalida');
+      }
+    }
+
+    function volverAEscaner() {
+      empleadoActual = null;
+      ocultar('pantallaMenu');
+      mostrar('pantallaEscaner');
+      reanudarEscaner();
+    }
+
+    document.getElementById('btnEntrada').onclick = function () {
+      registrarFichaje('Entrada');
+    };
+    document.getElementById('btnSalida').onclick = function () {
+      registrarFichaje('Salida');
+    };
+    document.getElementById('btnVolver').onclick = volverAEscaner;
+    document.getElementById('btnIncidencia').onclick = function () {
+      document.getElementById('formIncidencia').classList.toggle('hidden');
+    };
+
+    function registrarFichaje(tipo) {
+      llamarAPI('fichar', { qr: qrActual, tipo: tipo, metodo: 'QR-web' }).then(function (res) {
+        mensaje('msgMenu', res.ok ? res.mensaje : res.error, res.ok);
+        if (res.ok) setTimeout(volverAEscaner, 1800);
+      }).catch(function (err) {
+        mensaje('msgMenu', 'Error: ' + err.message, false);
+      });
+    }
+
+    document.getElementById('btnEnviarIncidencia').onclick = function () {
+      const categoria = document.getElementById('categoriaIncidencia').value;
+      const descripcion = document.getElementById('descripcionIncidencia').value.trim();
+      if (!descripcion) { mensaje('msgMenu', 'Escribe una descripción.', false); return; }
+      llamarAPI('incidencia', { qr: qrActual, categoria: categoria, descripcion: descripcion, lat: coords.lat, lng: coords.lng })
+        .then(function (res) {
+          mensaje('msgMenu', res.ok ? res.mensaje : res.error, res.ok);
+          if (res.ok) {
+            document.getElementById('descripcionIncidencia').value = '';
+            ocultar('formIncidencia');
+          }
+        }).catch(function (err) {
+          mensaje('msgMenu', 'Error: ' + err.message, false);
+        });
+    };
+
+    document.getElementById('btnSOS').onclick = function () {
+      if (!confirm('¿Confirmas envío de SOS?')) return;
+      llamarAPI('sos', { qr: qrActual, lat: coords.lat, lng: coords.lng }).then(function (res) {
+        mensaje('msgMenu', res.ok ? '🚨 ' + res.mensaje : res.error, res.ok);
+      }).catch(function (err) {
+        mensaje('msgMenu', 'Error: ' + err.message, false);
+      });
+    };
+
+    iniciarEscaner();
+  </script>
+</body>
+</html>
